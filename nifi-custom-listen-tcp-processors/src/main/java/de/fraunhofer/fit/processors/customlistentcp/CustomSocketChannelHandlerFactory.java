@@ -21,12 +21,10 @@ import java.util.concurrent.BlockingQueue;
 public class CustomSocketChannelHandlerFactory<E extends Event<SocketChannel>> implements ChannelHandlerFactory<E, AsyncChannelDispatcher> {
 
 
-    private byte[] inMsgDemarcatorBytes;
-    private boolean keepInMsgDemarcator;
+    private boolean keepInMsgLenInfo;
 
-    public CustomSocketChannelHandlerFactory(byte[] inMsgDemarcatorBytes, boolean keepInMsgDemarcator) {
-        this.inMsgDemarcatorBytes = inMsgDemarcatorBytes;
-        this.keepInMsgDemarcator = keepInMsgDemarcator;
+    public CustomSocketChannelHandlerFactory(boolean keepInMsgLenInfo) {
+        this.keepInMsgLenInfo = keepInMsgLenInfo;
     }
 
     @Override
@@ -36,7 +34,7 @@ public class CustomSocketChannelHandlerFactory<E extends Event<SocketChannel>> i
                                                                    final EventFactory<E> eventFactory,
                                                                    final BlockingQueue<E> events,
                                                                    final ComponentLog logger) {
-        return new CustomSocketChannelHandler<>(key, dispatcher, charset, eventFactory, events, logger, inMsgDemarcatorBytes, keepInMsgDemarcator);
+        return new CustomSocketChannelHandler<>(key, dispatcher, charset, eventFactory, events, logger, keepInMsgLenInfo);
     }
 
     @Override
@@ -46,6 +44,6 @@ public class CustomSocketChannelHandlerFactory<E extends Event<SocketChannel>> i
                                                                       final EventFactory<E> eventFactory,
                                                                       final BlockingQueue<E> events,
                                                                       final ComponentLog logger) {
-        return new CustomSSLSocketChannelHandler<>(key, dispatcher, charset, eventFactory, events, logger, inMsgDemarcatorBytes, keepInMsgDemarcator);
+        return new CustomSSLSocketChannelHandler<>(key, dispatcher, charset, eventFactory, events, logger, keepInMsgLenInfo);
     }
 }

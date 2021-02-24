@@ -12,6 +12,7 @@ import org.apache.nifi.processor.util.listen.event.EventFactory;
 import org.apache.nifi.processor.util.listen.event.EventFactoryUtil;
 import org.apache.nifi.processor.util.listen.handler.socket.SocketChannelHandler;
 import org.apache.nifi.processor.util.listen.response.socket.SSLSocketChannelResponder;
+import org.apache.nifi.processor.util.listen.response.socket.SocketChannelResponder;
 import org.apache.nifi.remote.io.socket.ssl.SSLSocketChannel;
 
 import java.io.ByteArrayOutputStream;
@@ -19,6 +20,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
@@ -34,9 +36,10 @@ public class CustomSSLSocketChannelHandler<E extends Event<SocketChannel>> exten
 
     private final ByteArrayOutputStream currBytes = new ByteArrayOutputStream(4096);
 
-    private byte[] inMsgDemarcatorBytes;
-    private boolean keepInMsgDemarcator;
+    private boolean keepInMsgLenInfo;
     private int currDelimeterByteIndex;
+    
+    private final int msgLenInfo = 4;
 
     public CustomSSLSocketChannelHandler(final SelectionKey key,
                                    final AsyncChannelDispatcher dispatcher,
@@ -44,11 +47,9 @@ public class CustomSSLSocketChannelHandler<E extends Event<SocketChannel>> exten
                                    final EventFactory<E> eventFactory,
                                    final BlockingQueue<E> events,
                                    final ComponentLog logger,
-                                   final byte[] inMsgDemarcatorBytes,
-                                   final boolean keepInMsgDemarcator) {
+                                   final boolean keepInMsgLenInfo) {
         super(key, dispatcher, charset, eventFactory, events, logger);
-        this.inMsgDemarcatorBytes = inMsgDemarcatorBytes;
-        this.keepInMsgDemarcator = keepInMsgDemarcator;
+        this.keepInMsgLenInfo = keepInMsgLenInfo;
         this.currDelimeterByteIndex = 0;
     }
 
@@ -110,6 +111,14 @@ public class CustomSSLSocketChannelHandler<E extends Event<SocketChannel>> exten
         }
     }
 
+    
+    private static int byteArrayToLeInt(byte[] b) {
+        final ByteBuffer bb = ByteBuffer.wrap(b);
+        bb.order(ByteOrder.LITTLE_ENDIAN);
+        return bb.getInt();
+    }
+    
+    
     /**
      * Process the contents of the buffer. Give sub-classes a chance to override this behavior.
      *
@@ -121,41 +130,40 @@ public class CustomSSLSocketChannelHandler<E extends Event<SocketChannel>> exten
      */
     protected void processBuffer(final SSLSocketChannel sslSocketChannel, final SocketChannel socketChannel,
                                  final int bytesRead, final byte[] buffer) throws InterruptedException, IOException {
+    	
         final InetAddress sender = socketChannel.socket().getInetAddress();
-
-        // go through the buffer looking for the end of each message
-        for (int i = 0; i < bytesRead; i++) {
-            final byte currByte = buffer[i];
-
-            // check if at end of a message
-            if (currByte == inMsgDemarcatorBytes[currDelimeterByteIndex]) {
-
-                if (keepInMsgDemarcator) {
-                    currBytes.write(currByte);
-                }
-
-                // If the last byte in inMsgDemarcatorBytes is reached, then separate message
-                if (currDelimeterByteIndex == inMsgDemarcatorBytes.length - 1) {
-                    if (currBytes.size() > 0) {
-                        final SSLSocketChannelResponder response = new SSLSocketChannelResponder(socketChannel, sslSocketChannel);
-                        final Map<String, String> metadata = EventFactoryUtil.createMapWithSender(sender.toString());
-                        final E event = eventFactory.create(currBytes.toByteArray(), metadata, response);
-                        events.offer(event);
-                        currBytes.reset();
-                    }
-
-                } else {
-                // Don't write the delimeter bytes to output
-                currDelimeterByteIndex++;
-                }
-
-
-            } else {
-                currBytes.write(currByte);
-            }
-
-
+        
+        int currBytesRead = 0;
+        while(currBytesRead < bytesRead) {
+            
+	        byte[] msgLengthArr = new byte[this.msgLenInfo];
+	        System.arraycopy(buffer, currBytesRead, msgLengthArr, 0, msgLengthArr.length);
+	        currBytesRead += msgLengthArr.length;
+	        int msgLength = byteArrayToLeInt(msgLengthArr);
+	        
+	        byte[] message = new byte[msgLength];
+	        System.arraycopy(buffer, currBytesRead, message, 0, message.length);
+	        currBytesRead += message.length;
+	        
+	        byte[] final_message = null;
+	        if(this.keepInMsgLenInfo) {
+	        	final_message = new byte[msgLengthArr.length + message.length];
+	        	System.arraycopy(msgLengthArr, 0, final_message, 0, msgLengthArr.length);
+	        	System.arraycopy(message, 0, final_message, msgLengthArr.length, message.length);
+	        }
+	        else {
+	        	final_message = message;
+	        }
+	        
+            final SSLSocketChannelResponder response = new SSLSocketChannelResponder(socketChannel, sslSocketChannel);
+	        final Map<String, String> metadata = EventFactoryUtil.createMapWithSender(sender.toString());
+	        final E event = eventFactory.create(final_message, metadata, response);
+	        events.offer(event);
+	
+	
+	        
         }
+
     }
 
     @Override

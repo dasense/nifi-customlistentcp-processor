@@ -83,18 +83,10 @@ public class CustomListenTCP extends AbstractListenEventBatchingProcessor<Standa
             .defaultValue(SSLContextService.ClientAuth.REQUIRED.name())
             .build();
 
-    public static final PropertyDescriptor INCOMING_MESSAGE_DELIMITER = new PropertyDescriptor.Builder()
-            .name("Incoming Message Delimiter")
-            .displayName("Incoming Message Delimiter")
-            .description("Specify the delimiter to separate incoming stream to different messages (multiple bytes are supported as delimeter).")
-            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-            .defaultValue("\\n")
-            .required(true)
-            .build();
-
-    static final PropertyDescriptor KEEP_IN_DELIMITER = new PropertyDescriptor.Builder()
-            .name("Keep incoming message delimiter")
-            .description("Whether to keep the delimiter for the incoming message")
+    
+    static final PropertyDescriptor KEEP_LEN_INFO = new PropertyDescriptor.Builder()
+            .name("Keep incoming message length information")
+            .description("Whether to keep the length information for the incoming message")
             .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
             .expressionLanguageSupported(true)
             .defaultValue("true")
@@ -110,8 +102,7 @@ public class CustomListenTCP extends AbstractListenEventBatchingProcessor<Standa
                 MAX_CONNECTIONS,
                 SSL_CONTEXT_SERVICE,
                 CLIENT_AUTH,
-                INCOMING_MESSAGE_DELIMITER,
-                KEEP_IN_DELIMITER
+                KEEP_LEN_INFO
         );
     }
 
@@ -138,10 +129,7 @@ public class CustomListenTCP extends AbstractListenEventBatchingProcessor<Standa
         final int maxConnections = context.getProperty(MAX_CONNECTIONS).asInteger();
         final int bufferSize = context.getProperty(RECV_BUFFER_SIZE).asDataSize(DataUnit.B).intValue();
         final Charset charSet = Charset.forName(context.getProperty(CHARSET).getValue());
-
-        final String inMsgDemarcator = context.getProperty(INCOMING_MESSAGE_DELIMITER).getValue().replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
-        inMsgDemarcatorBytes = inMsgDemarcator.getBytes(charset);
-        final boolean keepInMsgDemarcator = context.getProperty(KEEP_IN_DELIMITER).asBoolean();
+        final boolean keepInMsgLenInfo = context.getProperty(KEEP_LEN_INFO).asBoolean();
 
         // initialize the buffer pool based on max number of connections and the buffer size
         final BlockingQueue<ByteBuffer> bufferPool = createBufferPool(maxConnections, bufferSize);
@@ -158,7 +146,7 @@ public class CustomListenTCP extends AbstractListenEventBatchingProcessor<Standa
         }
 
         final EventFactory<StandardEvent> eventFactory = new StandardEventFactory();
-        final ChannelHandlerFactory<StandardEvent<SocketChannel>, AsyncChannelDispatcher> handlerFactory = new CustomSocketChannelHandlerFactory<>(inMsgDemarcatorBytes, keepInMsgDemarcator);
+        final ChannelHandlerFactory<StandardEvent<SocketChannel>, AsyncChannelDispatcher> handlerFactory = new CustomSocketChannelHandlerFactory<>(keepInMsgLenInfo);
         return new SocketChannelDispatcher(eventFactory, handlerFactory, bufferPool, events, getLogger(), maxConnections, sslContext, clientAuth, charSet);
     }
 

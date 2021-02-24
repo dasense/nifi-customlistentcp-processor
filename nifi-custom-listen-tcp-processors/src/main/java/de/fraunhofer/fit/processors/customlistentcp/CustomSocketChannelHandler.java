@@ -25,6 +25,8 @@ import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.nio.ByteOrder;
+
 
 /**
  * Reads from the given SocketChannel into the provided buffer. If the given delimiter is found, the data
@@ -33,10 +35,10 @@ import java.util.concurrent.BlockingQueue;
 public class CustomSocketChannelHandler<E extends Event<SocketChannel>> extends SocketChannelHandler<E> {
 
     private final ByteArrayOutputStream currBytes = new ByteArrayOutputStream(4096);
-
-    private byte[] inMsgDemarcatorBytes;
-    private boolean keepInMsgDemarcator;
+    private boolean keepInMsgLenInfo;
     private int currDelimeterByteIndex;
+    
+    private final int msgLenInfo = 4;
 
     public CustomSocketChannelHandler(final SelectionKey key,
                                         final AsyncChannelDispatcher dispatcher,
@@ -44,11 +46,10 @@ public class CustomSocketChannelHandler<E extends Event<SocketChannel>> extends 
                                         final EventFactory<E> eventFactory,
                                         final BlockingQueue<E> events,
                                         final ComponentLog logger,
-                                        final byte[] inMsgDemarcatorBytes,
-                                        final boolean keepInMsgDemarcator) {
+                                        final boolean keepInMsgLenInfo) {
         super(key, dispatcher, charset, eventFactory, events, logger);
-        this.inMsgDemarcatorBytes = inMsgDemarcatorBytes;
-        this.keepInMsgDemarcator = keepInMsgDemarcator;
+        
+        this.keepInMsgLenInfo = keepInMsgLenInfo;
         this.currDelimeterByteIndex = 0;
     }
 
@@ -111,6 +112,13 @@ public class CustomSocketChannelHandler<E extends Event<SocketChannel>> extends 
         }
     }
 
+    
+    private static int byteArrayToLeInt(byte[] b) {
+        final ByteBuffer bb = ByteBuffer.wrap(b);
+        bb.order(ByteOrder.LITTLE_ENDIAN);
+        return bb.getInt();
+    }
+    
     /**
      * Process the contents that have been read into the buffer. Allow sub-classes to override this behavior.
      *
@@ -119,50 +127,49 @@ public class CustomSocketChannelHandler<E extends Event<SocketChannel>> extends 
      * @throws InterruptedException if interrupted when queuing events
      */
     protected void processBuffer(final SocketChannel socketChannel, final ByteBuffer socketBuffer) throws InterruptedException, IOException {
-        // get total bytes in buffer
-        final int total = socketBuffer.remaining();
+      
         final InetAddress sender = socketChannel.socket().getInetAddress();
 
-        // go through the buffer looking for the end of each message
-        currBytes.reset();
-        for (int i = 0; i < total; i++) {
-            // NOTE: For higher throughput, the looking for \n and copying into the byte stream could be improved
-            // Pull data out of buffer and cram into byte array
-            byte currByte = socketBuffer.get();
-
-            // check if at end of a message
-            if (currByte == inMsgDemarcatorBytes[currDelimeterByteIndex]) {
-
-                if(keepInMsgDemarcator) {
-                    currBytes.write(currByte);
-                }
-
-                // If the last byte in inMsgDemarcatorBytes is reached, then separate message
-                if (currDelimeterByteIndex == inMsgDemarcatorBytes.length - 1) {
-                    if (currBytes.size() > 0) {
-                        final SocketChannelResponder response = new SocketChannelResponder(socketChannel);
-                        final Map<String, String> metadata = EventFactoryUtil.createMapWithSender(sender.toString());
-                        final E event = eventFactory.create(currBytes.toByteArray(), metadata, response);
-                        events.offer(event);
-                        currBytes.reset();
-
-                        // Reset the currDelimeterByteIndex to 0 to start the next detection
-                        currDelimeterByteIndex = 0;
-
-                        // Mark this as the start of the next message
-                        socketBuffer.mark();
-                    }
-                } else {
-                    // Don't write the delimeter bytes to output
-                    currDelimeterByteIndex++;
-                }
-            } else {
-                currBytes.write(currByte);
-            }
-
-
+        //at least the length info of the next message can be extracted
+        while(socketBuffer.remaining() > this.msgLenInfo) {
+        	
+        	
+	        byte[] msgLengthArr = new byte[this.msgLenInfo];
+	        socketBuffer.get(msgLengthArr, 0, msgLengthArr.length);
+	        int msgLength = byteArrayToLeInt(msgLengthArr);
+	        
+	        //check if we the whole message is contained in the buffer. if not, leave the function
+	        if(socketBuffer.remaining() < msgLength) {
+	        	//reset the position s.t. the buffer points to the start of the next message
+	        	socketBuffer.position(socketBuffer.position() - this.msgLenInfo);
+	        	socketBuffer.mark();
+	        	return;
+	        }
+	        
+	        byte[] message = new byte[msgLength];
+	        socketBuffer.get(message,0,msgLength);
+	        
+	        byte[] final_message = null;
+	        if(this.keepInMsgLenInfo) {
+	        	final_message = new byte[msgLengthArr.length + message.length];
+	        	System.arraycopy(msgLengthArr, 0, final_message, 0, msgLengthArr.length);
+	        	System.arraycopy(message, 0, final_message, msgLengthArr.length, message.length);
+	        }
+	        else {
+	        	final_message = message;
+	        }
+	        
+	        final SocketChannelResponder response = new SocketChannelResponder(socketChannel);
+	        final Map<String, String> metadata = EventFactoryUtil.createMapWithSender(sender.toString());
+	        final E event = eventFactory.create(final_message, metadata, response);
+	        events.offer(event);
+	
+	
+	        // Mark this as the start of the next message
+	        socketBuffer.mark();
         }
     }
+    
 
     @Override
     public byte getDelimiter() {
